@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	// "encoding/binary"
+	"audioserver/pkg/connect"
 	"flag"
 	"io"
 	"log"
@@ -13,15 +14,10 @@ import (
 	"time"
 )
 
-var (
-	totalStreamedSize int
-)
-
 const (
 	// Sample rate of the audio file
 	sampleRate = 44100
 	seconds    = 1
-
 	// Higher buffer size = more cpu intensive, but less chance for dropped data
 	BUFFERSIZE = 8192
 	// Lower delay = more responsive, faster streaming
@@ -102,71 +98,4 @@ func main() {
 	})
 	log.Println("Listening on port 8080...")
 	log.Fatal(http.ListenAndServe(":8080", nil))
-}
-
-// Add connection without blocking
-func (cp *ConnectionPool) AddConnection(connection *Connection) {
-	defer cp.mu.Unlock()
-	cp.mu.Lock()
-	cp.ConnectionMap[connection] = struct{}{}
-}
-
-// Delete connection without blocking
-func (cp *ConnectionPool) DeleteConnection(connection *Connection) {
-	defer cp.mu.Unlock()
-	cp.mu.Lock()
-	delete(cp.ConnectionMap, connection)
-}
-
-func NewConnectionPool() *ConnectionPool {
-	connectionMap := make(map[*Connection]struct{})
-	return &ConnectionPool{ConnectionMap: connectionMap}
-}
-
-func (cp *ConnectionPool) Broadcast(buffer []byte) {
-	// first, make sure cp won't data race...
-	defer cp.mu.Unlock()
-	cp.mu.Lock()
-
-	for connection := range cp.ConnectionMap {
-		copy(connection.buffer, buffer)
-		// Waits until each individual connection.bufferChannel is free
-		select {
-		case connection.bufferChannel <- connection.buffer:
-			size := len(connection.buffer)
-			totalStreamedSize += size
-			// log.Printf("Total streamed size: %v", totalStreamedSize)
-		default:
-		}
-	}
-}
-
-// Reads from entire contents of file and broadcasts to each connection in the connectionpool
-func stream(connectionPool *ConnectionPool, content []byte) {
-
-	log.Println("inside go stream...")
-	buffer := make([]byte, BUFFERSIZE)
-
-	// TODO: Need to fix this and actually stop streaming when the entire file has been streamed.
-	// Currently resets and resumes streaming when song has been streamed, causing file to loop indefinitely in browser.
-	for {
-		log.Println("inside loop iteration...")
-		log.Println("buffer size:", len(buffer))
-		tempfile := bytes.NewReader(content)
-		clear(buffer)
-
-		ticker := time.NewTicker(time.Millisecond * DELAY)
-		// Changing ticker delay causes below code to be executed every DELAY ms
-		for range ticker.C {
-			// log.Println("inside ticker iteration...")
-			// read INTO buffer
-			_, err := tempfile.Read(buffer)
-			if err == io.EOF {
-				log.Println("Whole file streamed")
-				ticker.Stop()
-				break
-			}
-			connectionPool.Broadcast(buffer)
-		}
-	}
 }
